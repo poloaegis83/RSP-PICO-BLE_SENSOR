@@ -53,6 +53,11 @@ _ENV_SENSE_SERVICE = (
 Power_Revolutions = 0  # this is counter for power measurements Revolutions field
 Power_Timestamp   = 0  # this is Timestamp for power measurements Timestamp field
 
+def get_povwe_values():
+    adc = ADC(Pin(28))
+    power = adc.read_u16()*0.01 +50
+    return int(power)
+
 def get_heart_rate():
     adc = ADC(Pin(28))
     heart = adc.read_u16()*0.01 +50
@@ -64,9 +69,11 @@ class BLESimplePeripheral:
         self._ble.active(True)
         self._ble.irq(self._irq)
         ( (self.hr_handle,),) = self._ble.gatts_register_services((POWER_SERVICE,))
+        #( (self.hr_handle,),) = self._ble.gatts_register_services((HR_SERVICE,))
         self._connections = set()
         self._write_callback = None
         self._payload = advertising_payload(name=name, services=[POWER_UUID])
+        #self._payload = advertising_payload(name=name, services=[HR_UUID])
         self._advertise()
 
     def _irq(self, event, data):
@@ -119,7 +126,7 @@ class BLESimplePeripheral:
         flags = 0x20
         Power_Revolutions = Power_Revolutions + 1
         Power_Timestamp   = Power_Timestamp + 1
-        PowerV = 300
+        PowerV = get_povwe_values()
         heart_values =bytearray([flags & 0xff ,flags>>8 & 0xff,PowerV & 0xff,PowerV >>8 & 0xff,Power_Revolutions & 0xff,Power_Revolutions>>8 & 0xff,Power_Timestamp & 0xff,Power_Timestamp>>8 & 0xff]) # 8 bytes data per package
         self._ble.gatts_write(self.hr_handle, heart_values)
         if notify or indicate:
