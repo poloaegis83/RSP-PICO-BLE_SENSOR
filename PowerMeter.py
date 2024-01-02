@@ -3,6 +3,7 @@ from utime import sleep
 import bluetooth
 from Ble_Advertising import advertising_payload
 from micropython import const
+import random
 
 _IRQ_CENTRAL_CONNECT = const(1)
 _IRQ_CENTRAL_DISCONNECT = const(2)
@@ -28,6 +29,23 @@ LastPower  = []  # compare last _LAST_DATA Power data
 
 #volt_count = 0
 #volt_postive = 0  # 1 postive, 2 nagtive
+cali_offset = 0
+
+def calibration():
+    global cali_offset
+    VoltA = 0
+    t = 23
+    index = t
+    while(index > 0):
+        adc = ADC(Pin(28))
+        VoltA = VoltA + adc.read_u16()
+        index = index-1
+        sleep(0.3)
+    calibration_bottom = 200
+    cali_offset = VoltA/t + calibration_bottom
+    print("calibration offset = ",cali_offset)
+
+
 EMA = 0
 def Smoothing_power(Pdata):
     global EMA
@@ -47,14 +65,18 @@ def get_sensor_vaule(): # get voltage vaule from amp
 
 def AngularVelocity():
     # get from IMU
-    AngV = 520  # degree/s (rpm ~= 90)
+    AngV = 360 + random.random()*80
+    #AngV = 520  # degree/s (rpm ~= 90)
     print("AngularVelocity=",AngV)
     #return cadence
     return AngV
 
 def caculate_power():
     volt = get_sensor_vaule()
-
+    if volt < cali_offset:
+        volt = 0
+    else:
+        volt = volt - cali_offset
     force = volt * X_fact
     print("force N= ",force,"vlot=",volt)
     AngV = AngularVelocity()
@@ -134,10 +156,13 @@ ble = bluetooth.BLE()
 blepm = BlePowerMeter(ble,"PowerMeter_longhao")
 
 counter = 0
+print("calibration Start")
+calibration()
+print("calibration Done")
 # Start an infinite loop
 while True:
-    if not blepm.is_connected():
-        pin.toggle()
+    #if not blepm.is_connected():
+    #    pin.toggle()
     if counter % 10 == 0:
         blepm.update_power_data(notify=True, indicate=False)
     counter = counter + 1
