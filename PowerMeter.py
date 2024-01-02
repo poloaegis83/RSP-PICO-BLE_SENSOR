@@ -19,45 +19,56 @@ POWER_SERVICE = (POWER_UUID, (POWER_CHAR,),)
 Power_Revolutions = 0  # this is counter for power measurements Revolutions field
 Power_Timestamp   = 0  # this is Timestamp for power measurements Timestamp field
 
+Crank_Length = 0.1725
+
 sensing_time = 40 # in ms
-X_fact = 1.0 # force/vlotage curve
-LastVlot   = []  # compare last _LAST_DATA Vlotage data
+X_fact = 0.012 # force/vlotage curve
+#LastVlot   = []  # compare last _LAST_DATA Vlotage data
 LastPower  = []  # compare last _LAST_DATA Power data
 
-def Smoothing_poewr():
+#volt_count = 0
+#volt_postive = 0  # 1 postive, 2 nagtive
+EMA = 0
+def Smoothing_power(Pdata):
+    global EMA
+    if EMA == 0:
+        EMA = Pdata
+    EMA = (Pdata*4 + EMA)/5
+    NewPdata = EMA
+    print("Smoothing_power = ",NewPdata)
+    return NewPdata
     None # "moving average" ?
 
 def get_sensor_vaule(): # get voltage vaule from amp
+    global volt_count, volt_postive
     adc = ADC(Pin(28))
     sensor_v = adc.read_u16()
-    LastVlot.append(sensor_v)
-    if len(LastVlot) == _LAST_DATA: # if length = _LAST_DATA pop first one
-        LastVlot.pop(0)
-    return int(sensor_v)
+    return sensor_v
 
-def calcute_cadence():
-    # see Last Vlot to calcute cadence
-    Postive = 0
-    PostiveLast = -1
-    step = 0
-    for Volt in LastVlot:
-        if Volt > 0:
-            Postive = 1
-        if Volt < 0:
-            Postive = 0
-        if (Postive == 0 and PostiveLast == 1) or (Postive == 1 and PostiveLast == 0):
-            # one roation
-            step = step + 1
-        PostiveLast = Postive
-    cadence = _LAST_DATA * sensing_time / step # total time / step (roation times)
-    print("cadence=",cadence)
-    return cadence
+def AngularVelocity():
+    # get from IMU
+    AngV = 520  # degree/s (rpm ~= 90)
+    print("AngularVelocity=",AngV)
+    #return cadence
+    return AngV
 
 def caculate_power():
     volt = get_sensor_vaule()
+
     force = volt * X_fact
-    rpm = calcute_cadence()
-    power = force * rpm
+    print("force N= ",force,"vlot=",volt)
+    AngV = AngularVelocity()
+
+    Perimeter = 2 * 3.14159 * Crank_Length # 2πr
+
+    print("Perimeter= ",Perimeter)
+    power = force * Perimeter * (AngV/360) # P = Force * 2πr * (angle traveled/360, per sec)
+  
+    power = power * 2
+    print("power = force * (distance)  =",power,"Watts")
+    rpm = AngV * 60 / 360
+    print("rpm =",rpm)
+    Smoothing_power(power)
     return power
 
 def get_power_values():
