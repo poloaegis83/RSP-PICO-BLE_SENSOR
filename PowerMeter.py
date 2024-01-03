@@ -4,6 +4,7 @@ import bluetooth
 from Ble_Advertising import advertising_payload
 from micropython import const
 import random
+import math
 
 _IRQ_CENTRAL_CONNECT = const(1)
 _IRQ_CENTRAL_DISCONNECT = const(2)
@@ -19,9 +20,12 @@ POWER_FEATURE_CHAR   = (bluetooth.UUID(0x2A65), _FLAG_READ ,)
 SENSOR_LOCATION_CHAR = (bluetooth.UUID(0x2A5D), _FLAG_READ ,)
 POWER_SERVICE = (POWER_UUID, (POWER_CHAR,POWER_FEATURE_CHAR,SENSOR_LOCATION_CHAR),)
 
-Power_Revolutions = 0  # this is counter for power measurements Revolutions field
-Power_Timestamp   = 0  # this is Timestamp for power measurements Timestamp field
-
+Crank_Revolutions = 0  # this is counter for power measurements Crank Revolutions field
+Crank_Revolutions_L = 0
+Crank_Timestamp   = 0  # this is Timestamp for power measurements Last Crank Event Time field
+Crank_Timestamp_L = 0
+Crank_Revolutions_out = 0
+rpm = 0
 Crank_Length = 0.1725
 
 sensing_time = 40 # in ms, 25 times per sec(25Hz)
@@ -35,7 +39,7 @@ cali_offset = 0
 def calibration():
     global cali_offset
     VoltA = 0
-    t = 23
+    t = 10
     index = t
     while(index > 0):
         adc = ADC(Pin(28))
@@ -67,14 +71,14 @@ def get_sensor_vaule(): # get voltage vaule from amp
 
 def AngularVelocity():
     # get from IMU
-    AngV = 360 + random.random()*50
+    AngV = 500 + random.random()*70
     #AngV = 520  # degree/s (rpm ~= 90)
     #print("AngularVelocity=",AngV)
     #return cadence
     return AngV
 
 def caculate_power():
-
+    global rpm
     volt = get_sensor_vaule()
     if volt < cali_offset:
         volt = 0
@@ -101,9 +105,9 @@ def get_power_values(): # In a second
     # get average power in a second
     global LastPower
     PowerOut = sum(LastPower)/len(LastPower)
-    print("sum power / (",len(LastPower),")=",sum(LastPower),"average = ",PowerOut)
+    #print("sum power / (",len(LastPower),")=",sum(LastPower),"average = ",PowerOut)
     smooth_power = Smoothing_power(PowerOut)
-    return int(PowerOut)
+    return int(smooth_power)
 
 class BlePowerMeter:
     def __init__(self, ble, name):
@@ -148,17 +152,32 @@ class BlePowerMeter:
             LastPower.append(power)
             #print("sum power / (",len(LastPower),")=",sum(LastPower),"average = ",sum(LastPower)/len(LastPower))
 
-    def Update_Power_feature(self):
+    def Update_Power_feature(self): # https://github.com/oesmith/gatt-xml  , for bit field
         Features = bytearray([0x00,0x00,0x00,0x08])
         self._ble.gatts_write(self.pm_handle, Features) # send power data by ble
 
+    def Update_Sensor_Location(self): #https://github.com/oesmith/gatt-xml , for bit field
+        Location = bytearray([0x06])
+        self._ble.gatts_write(self.pm_handle, Location) # send power data by ble
+
     def SendPowerData(self, notify=True, indicate=False):
-        global Power_Revolutions,Power_Timestamp
+        global Crank_Revolutions, Crank_Revolutions_L, Crank_Revolutions_out,Crank_Timestamp, Crank_Timestamp_L, rpm
         flags = 0x20
-        Power_Revolutions = Power_Revolutions + 1
-        Power_Timestamp   = Power_Timestamp + 1
+        revo = 0
+        Crank_Revolutions = Crank_Revolutions + (rpm/60)
+        if Crank_Revolutions_L != 0:
+            revo = int(math.floor(Crank_Revolutions) - math.floor(Crank_Revolutions_L)) # compare wtih last time, revo = Crank_Revolutions difference between 2 sensing
+        print("Crank_Revolutions",Crank_Revolutions,"Crank_Revolutions_L = ",Crank_Revolutions_L,"rpm/60 = ",(rpm/60))
+        Crank_Revolutions_L = Crank_Revolutions
+
+        Crank_Revolutions_out = Crank_Revolutions_out + revo
+
+        if revo != 0:
+            Crank_Timestamp   = int(Crank_Timestamp + (revo/rpm * 60) * 1024) # Crank_Timestamp (Last Even times) unit = 1/1024 sec
+                                                                              # for calculate (timestamp crank Revolutions add times(revo) / rpm) *60 = seconds traveled in revo.
+        print("rpm =",rpm,"Crank_Revolutions_out = ",Crank_Revolutions_out, "revo =",revo, "Timestamp = ",Crank_Timestamp)
         PowerV = get_power_values()
-        Power_values =bytearray([flags & 0xff ,flags>>8 & 0xff,PowerV & 0xff,PowerV >>8 & 0xff,Power_Revolutions & 0xff,Power_Revolutions>>8 & 0xff,Power_Timestamp & 0xff,Power_Timestamp>>8 & 0xff]) # 8 bytes data per package
+        Power_values =bytearray([flags & 0xff ,flags>>8 & 0xff,PowerV & 0xff, PowerV >>8 & 0xff,Crank_Revolutions_out & 0xff,Crank_Revolutions_out>>8 & 0xff,Crank_Timestamp & 0xff,Crank_Timestamp>>8 & 0xff]) # 8 bytes data per package
         self._ble.gatts_write(self.pm_handle, Power_values) # send power data by ble
         if notify or indicate:
             for conn_handle in self._connections:
@@ -180,12 +199,15 @@ print("calibration Start")
 calibration()
 print("calibration Done")
 # Start an infinite loop
+connected = 0
 while True:
     #if not blepm.is_connected():
     #    pin.toggle()
-    if blepm.is_connected():
+    if blepm.is_connected() and connected == 0:
         sleep(0.5)
         blepm.Update_Power_feature()
+        blepm.Update_Sensor_Location()
+        connected = 1
     blepm.update_power_data()
     if counter % 25 == 0 and counter != 0:
         blepm.SendPowerData(notify=True, indicate=False)
