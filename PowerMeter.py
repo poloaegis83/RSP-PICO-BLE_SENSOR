@@ -1,4 +1,4 @@
-from machine import Pin, ADC
+from machine import Pin, ADC, Timer
 from utime import sleep
 import bluetooth
 from Ble_Advertising import advertising_payload
@@ -12,21 +12,22 @@ _IRQ_CENTRAL_DISCONNECT = const(2)
 _FLAG_READ = const(0x0002)
 _FLAG_NOTIFY = const(0x0010)
 
-_LAST_DATA = const(30)
-
-POWER_UUID    = bluetooth.UUID(0x1818)
+POWER_UUID           =  bluetooth.UUID(0x1818)
 POWER_CHAR           = (bluetooth.UUID(0x2A63), _FLAG_READ | _FLAG_NOTIFY,)
 POWER_FEATURE_CHAR   = (bluetooth.UUID(0x2A65), _FLAG_READ ,)
 SENSOR_LOCATION_CHAR = (bluetooth.UUID(0x2A5D), _FLAG_READ ,)
 POWER_SERVICE = (POWER_UUID, (POWER_CHAR,POWER_FEATURE_CHAR,SENSOR_LOCATION_CHAR),)
 
 Crank_Revolutions = 0  # this is counter for power measurements Crank Revolutions field
-Crank_Revolutions_L = 0
+#Crank_Revolutions_L = 0
 Crank_Timestamp   = 0  # this is Timestamp for power measurements Last Crank Event Time field
-Crank_Timestamp_L = 0
-Crank_Revolutions_out = 0
-rpm = 0
+#Crank_Timestamp_L = 0
+#Crank_Revolutions_out = 0
+#rpm = 0
 Crank_Length = 0.1725
+
+angle_count = 0
+crank_event_counter = 0
 
 sensing_time = 40 # in ms, 25 times per sec(25Hz)
 X_fact = 0.012 # force/vlotage curve
@@ -77,8 +78,8 @@ def AngularVelocity():
     #return cadence
     return AngV
 
-def caculate_power():
-    global rpm
+def calculate_power():
+    global rpm, angle_count, Crank_Revolutions, Crank_Timestamp, crank_event_counter
     volt = get_sensor_vaule()
     if volt < cali_offset:
         volt = 0
@@ -95,7 +96,20 @@ def caculate_power():
   
     power = power * 2
     #print("power = force * (distance)  =",power,"Watts")
-    rpm = AngV * 60 / 360
+    #rpm = AngV * 60 / 360
+
+    # calculate crank event
+    angle_count += AngV * 0.04 # in 40ms
+    crank_event_counter += 1
+
+    if angle_count > 360:       # crank event (one rotation)
+        Crank_Timestamp += int((crank_event_counter*40)/1000 * 1024)
+        crank_event_counter = 0
+        while angle_count > 360:    # crank event (one rotation)
+            angle_count -= 360
+            Crank_Revolutions += 1
+
+    #print("angle_count =",angle_count)
     #print("rpm =",rpm)
     #Smoothing_power(power)
 
@@ -142,7 +156,7 @@ class BlePowerMeter:
     
     def update_power_data(self):
         global LastPower
-        power = caculate_power()
+        power = calculate_power()
         # update power data (40ms) into power list, full of list is 25 data
         if len(LastPower) == 25:
             LastPower.append(power)
@@ -161,23 +175,30 @@ class BlePowerMeter:
         self._ble.gatts_write(self.pm_handle, Location) # send power data by ble
 
     def SendPowerData(self, notify=True, indicate=False):
-        global Crank_Revolutions, Crank_Revolutions_L, Crank_Revolutions_out,Crank_Timestamp, Crank_Timestamp_L, rpm
+        #global Crank_Revolutions, Crank_Revolutions_L, Crank_Revolutions_out,Crank_Timestamp, Crank_Timestamp_L, rpm, angle_count
         flags = 0x20
-        revo = 0
-        Crank_Revolutions = Crank_Revolutions + (rpm/60)
-        if Crank_Revolutions_L != 0:
-            revo = int(math.floor(Crank_Revolutions) - math.floor(Crank_Revolutions_L)) # compare wtih last time, revo = Crank_Revolutions difference between 2 sensing
-        print("Crank_Revolutions",Crank_Revolutions,"Crank_Revolutions_L = ",Crank_Revolutions_L,"rpm/60 = ",(rpm/60))
-        Crank_Revolutions_L = Crank_Revolutions
+        #revo = 0
+        #if angle_count > 360:
+        #    Crank_Timestamp   += ((angle_count/360)*60)*   #((angle_count/360)*60) rpm
+        #while angle_count > 360:
+        #    angle_count -= 360
+        #    Crank_Revolutions += 1
+            #Crank_Timestamp   += 1024
 
-        Crank_Revolutions_out = Crank_Revolutions_out + revo
+        #if Crank_Revolutions_L != 0:
+        #    revo = int(math.floor(Crank_Revolutions) - math.floor(Crank_Revolutions_L)) # compare wtih last time, revo = Crank_Revolutions difference between 2 sensing
+        #print("Crank_Revolutions",Crank_Revolutions,"Crank_Revolutions_L = ",Crank_Revolutions_L,"rpm/60 = ",(rpm/60))
+        #Crank_Revolutions_L = Crank_Revolutions
 
-        if revo != 0:
-            Crank_Timestamp   = int(Crank_Timestamp + (revo/rpm * 60) * 1024) # Crank_Timestamp (Last Even times) unit = 1/1024 sec
+        #Crank_Revolutions_out = Crank_Revolutions_out + revo
+
+        #if revo != 0:
+        #    Crank_Timestamp   = int(Crank_Timestamp + (revo/rpm * 60) * 1024) # Crank_Timestamp (Last Even times) unit = 1/1024 sec
                                                                               # for calculate (timestamp crank Revolutions add times(revo) / rpm) *60 = seconds traveled in revo.
-        print("rpm =",rpm,"Crank_Revolutions_out = ",Crank_Revolutions_out, "revo =",revo, "Timestamp = ",Crank_Timestamp)
+        #print("rpm =",rpm,"Crank_Revolutions_out = ",Crank_Revolutions_out, "revo =",revo, "Timestamp = ",Crank_Timestamp)
+        print("Crank_Revolutions = ",Crank_Revolutions, "Timestamp = ",Crank_Timestamp)
         PowerV = get_power_values()
-        Power_values =bytearray([flags & 0xff ,flags>>8 & 0xff,PowerV & 0xff, PowerV >>8 & 0xff,Crank_Revolutions_out & 0xff,Crank_Revolutions_out>>8 & 0xff,Crank_Timestamp & 0xff,Crank_Timestamp>>8 & 0xff]) # 8 bytes data per package
+        Power_values =bytearray([flags & 0xff ,flags>>8 & 0xff,PowerV & 0xff, PowerV >>8 & 0xff,Crank_Revolutions & 0xff,Crank_Revolutions>>8 & 0xff,Crank_Timestamp & 0xff,Crank_Timestamp>>8 & 0xff]) # 8 bytes data per package
         self._ble.gatts_write(self.pm_handle, Power_values) # send power data by ble
         if notify or indicate:
             for conn_handle in self._connections:
@@ -195,21 +216,37 @@ ble = bluetooth.BLE()
 blepm = BlePowerMeter(ble,"PowerMeter_longhao")
 
 counter = 0
+
 print("calibration Start")
 calibration()
 print("calibration Done")
 # Start an infinite loop
+
+def update_power_event(t):
+    blepm.update_power_data()
+def send_power_event(t):
+    blepm.SendPowerData(notify=True, indicate=False)
+
 connected = 0
+
+TimeEvent1 = Timer(-1)
+TimeEvent2 = Timer(-1)
+
+TimeEvent1.init(period=sensing_time, mode=Timer.PERIODIC, callback=update_power_event)
+TimeEvent2.init(period=1000, mode=Timer.PERIODIC, callback=send_power_event)
+
 while True:
     #if not blepm.is_connected():
-    #    pin.toggle()
+        #pin.toggle()
+        #sleep(0.2)
     if blepm.is_connected() and connected == 0:
         sleep(0.5)
         blepm.Update_Power_feature()
         blepm.Update_Sensor_Location()
         connected = 1
-    blepm.update_power_data()
-    if counter % 25 == 0 and counter != 0:
-        blepm.SendPowerData(notify=True, indicate=False)
-    counter = counter + 1
-    sleep(0.04)
+    machine.idle()
+    #blepm.update_power_data()
+    #if counter % 25 == 0 and counter != 0:
+    #blepm.SendPowerData(notify=True, indicate=False)
+    #counter = counter + 1
+    #sleep(0.04)
