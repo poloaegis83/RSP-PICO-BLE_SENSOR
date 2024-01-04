@@ -40,16 +40,16 @@ cali_offset = 0
 def calibration():
     global cali_offset
     VoltA = 0
-    t = 10
+    t = 20
     index = t
-    while(index > 0):
-        adc = ADC(Pin(28))
-        VoltA = VoltA + adc.read_u16()
-        index = index-1
+    adc = ADC(Pin(28))
+    while(index > 0):  
+        VoltA += adc.read_u16()
+        index -= 1
         sleep(0.3)
-    calibration_bottom = 10 # percent
+    calibration_bottom = 15 # percent
     cali_offset = VoltA/t
-    cali_offset = cali_offset + (calibration_bottom/100)*cali_offset
+    cali_offset += (calibration_bottom/100)*cali_offset
     print("calibration offset = ",cali_offset)
 
 
@@ -79,7 +79,7 @@ def AngularVelocity():
     return AngV
 
 def calculate_power():
-    global rpm, angle_count, Crank_Revolutions, Crank_Timestamp, crank_event_counter
+    global angle_count, Crank_Revolutions, Crank_Timestamp, crank_event_counter
     volt = get_sensor_vaule()
     if volt < cali_offset:
         volt = 0
@@ -92,14 +92,17 @@ def calculate_power():
     Perimeter = 2 * 3.14159 * Crank_Length # 2πr
 
     #print("Perimeter= ",Perimeter)
-    power = force * Perimeter * (AngV/360) # P = Force * 2πr * (angle traveled/360, per sec)
+    power = force * Perimeter * (AngV/360) * (0.040) # P = Force * 2πr * (angle traveled/360, per 40 ms)
   
+    if power < 1:
+        power = 0
     power = power * 2
+
     #print("power = force * (distance)  =",power,"Watts")
     #rpm = AngV * 60 / 360
 
     # calculate crank event
-    angle_count += AngV * 0.04 # in 40ms
+    angle_count += AngV * 0.040 # in 40ms
     crank_event_counter += 1
 
     if angle_count > 360:       # crank event (one rotation)
@@ -118,7 +121,7 @@ def calculate_power():
 def get_power_values(): # In a second
     # get average power in a second
     global LastPower
-    PowerOut = sum(LastPower)/len(LastPower)
+    PowerOut = sum(LastPower)
     #print("sum power / (",len(LastPower),")=",sum(LastPower),"average = ",PowerOut)
     smooth_power = Smoothing_power(PowerOut)
     return int(smooth_power)
@@ -174,9 +177,16 @@ class BlePowerMeter:
         Location = bytearray([0x06])
         self._ble.gatts_write(self.pm_handle, Location) # send power data by ble
 
+    def SendPowerFlagOnly(self):
+        flags = 0x20 #https://github.com/oesmith/gatt-xml , for bit field
+        Power_values =bytearray([flags & 0xff ,flags>>8 & 0xff,0x00,0x00,0x00,0x00,0x00,0x00])
+        self._ble.gatts_write(self.pm_handle, Power_values)
+        for conn_handle in self._connections:
+            self._ble.gatts_notify(conn_handle, self.pm_handle)
+
     def SendPowerData(self, notify=True, indicate=False):
         #global Crank_Revolutions, Crank_Revolutions_L, Crank_Revolutions_out,Crank_Timestamp, Crank_Timestamp_L, rpm, angle_count
-        flags = 0x20
+        flags = 0x20 #https://github.com/oesmith/gatt-xml , for bit field
         #revo = 0
         #if angle_count > 360:
         #    Crank_Timestamp   += ((angle_count/360)*60)*   #((angle_count/360)*60) rpm
@@ -196,8 +206,9 @@ class BlePowerMeter:
         #    Crank_Timestamp   = int(Crank_Timestamp + (revo/rpm * 60) * 1024) # Crank_Timestamp (Last Even times) unit = 1/1024 sec
                                                                               # for calculate (timestamp crank Revolutions add times(revo) / rpm) *60 = seconds traveled in revo.
         #print("rpm =",rpm,"Crank_Revolutions_out = ",Crank_Revolutions_out, "revo =",revo, "Timestamp = ",Crank_Timestamp)
-        print("Crank_Revolutions = ",Crank_Revolutions, "Timestamp = ",Crank_Timestamp)
+        #print("Crank_Revolutions = ",Crank_Revolutions, "Timestamp = ",Crank_Timestamp)
         PowerV = get_power_values()
+        print("PowerV = ",PowerV)
         Power_values =bytearray([flags & 0xff ,flags>>8 & 0xff,PowerV & 0xff, PowerV >>8 & 0xff,Crank_Revolutions & 0xff,Crank_Revolutions>>8 & 0xff,Crank_Timestamp & 0xff,Crank_Timestamp>>8 & 0xff]) # 8 bytes data per package
         self._ble.gatts_write(self.pm_handle, Power_values) # send power data by ble
         if notify or indicate:
@@ -208,8 +219,21 @@ class BlePowerMeter:
                 if indicate:
                     # Indicate connected centrals.
                     self._ble.gatts_indicate(conn_handle, self.pm_handle)
+button_mode = 0
+
+def Buttoncallback1(t):
+    global button_mode
+    print("button_mode=",button_mode)
+    if button_mode == 0:
+        button_mode = 1
+    elif button_mode == 1:
+        button_mode = 0
 
 pin = Pin("LED", Pin.OUT)
+
+Button   = machine.Pin(15, machine.Pin.IN,Pin.PULL_UP)
+Button.irq (trigger=Button.IRQ_FALLING, handler=Buttoncallback1) #interrupt
+
 # Create a Bluetooth Low Energy (BLE) object
 ble = bluetooth.BLE()
 # Create an instance of the BlePowerMeter class with the BLE object
@@ -221,13 +245,18 @@ print("calibration Start")
 calibration()
 print("calibration Done")
 # Start an infinite loop
+connected = 0
 
 def update_power_event(t):
-    blepm.update_power_data()
+    global connected
+    if connected or button_mode == 1:
+        blepm.update_power_data()
 def send_power_event(t):
-    blepm.SendPowerData(notify=True, indicate=False)
-
-connected = 0
+    global connected
+    if connected or button_mode == 1:
+        blepm.SendPowerData(notify=True, indicate=False)
+    else:
+        blepm.SendPowerFlagOnly()
 
 TimeEvent1 = Timer(-1)
 TimeEvent2 = Timer(-1)
@@ -236,14 +265,15 @@ TimeEvent1.init(period=sensing_time, mode=Timer.PERIODIC, callback=update_power_
 TimeEvent2.init(period=1000, mode=Timer.PERIODIC, callback=send_power_event)
 
 while True:
-    #if not blepm.is_connected():
-        #pin.toggle()
-        #sleep(0.2)
     if blepm.is_connected() and connected == 0:
+        pin.value(0)
         sleep(0.5)
         blepm.Update_Power_feature()
         blepm.Update_Sensor_Location()
         connected = 1
+    elif not blepm.is_connected():
+        pin.value(1)
+        connected = 0
     machine.idle()
     #blepm.update_power_data()
     #if counter % 25 == 0 and counter != 0:
