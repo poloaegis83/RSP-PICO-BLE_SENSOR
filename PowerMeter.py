@@ -11,12 +11,15 @@ _IRQ_CENTRAL_DISCONNECT = const(2)
 
 _FLAG_READ = const(0x0002)
 _FLAG_NOTIFY = const(0x0010)
+_FLAG_WRITE = const(0x0008)
+_FLAG_INDICATE = const(0x0020)
 
 POWER_UUID           =  bluetooth.UUID(0x1818)
-POWER_CHAR           = (bluetooth.UUID(0x2A63), _FLAG_READ | _FLAG_NOTIFY,)
+POWER_CHAR           = (bluetooth.UUID(0x2A63), _FLAG_NOTIFY,)
+POWER_CONTROL_CHAR   = (bluetooth.UUID(0x2A66), _FLAG_WRITE | _FLAG_INDICATE,)
 POWER_FEATURE_CHAR   = (bluetooth.UUID(0x2A65), _FLAG_READ ,)
 SENSOR_LOCATION_CHAR = (bluetooth.UUID(0x2A5D), _FLAG_READ ,)
-POWER_SERVICE = (POWER_UUID, (POWER_CHAR,POWER_FEATURE_CHAR,SENSOR_LOCATION_CHAR),)
+POWER_SERVICE = (POWER_UUID, (POWER_CHAR,POWER_FEATURE_CHAR,SENSOR_LOCATION_CHAR,POWER_CONTROL_CHAR),)
 
 Crank_Revolutions = 0  # this is counter for power measurements Crank Revolutions field
 #Crank_Revolutions_L = 0
@@ -131,7 +134,7 @@ class BlePowerMeter:
         self._ble = ble
         self._ble.active(True)
         self._ble.irq(self._irq)
-        ( (self.pm_handle,self.pf_handle,self.sl_handle,),) = self._ble.gatts_register_services((POWER_SERVICE,))
+        ( (self.pm_handle,self.pf_handle,self.sl_handle,self.pcp_handle,),) = self._ble.gatts_register_services((POWER_SERVICE,))
         self._connections = set()
         self._write_callback = None
         self._payload = advertising_payload(name=name, services=[POWER_UUID])
@@ -169,13 +172,13 @@ class BlePowerMeter:
             LastPower.append(power)
             #print("sum power / (",len(LastPower),")=",sum(LastPower),"average = ",sum(LastPower)/len(LastPower))
 
-    def Update_Power_feature(self): # https://github.com/oesmith/gatt-xml  , for bit field
-        Features = bytearray([0x00,0x00,0x00,0x08])
-        self._ble.gatts_write(self.pm_handle, Features) # send power data by ble
+    def SendPowerfeature(self): # https://github.com/oesmith/gatt-xml  , for bit field
+        Features = bytearray([0x08,0x00,0x00,0x00])
+        self._ble.gatts_write(self.pf_handle, Features) # send power data by ble
 
-    def Update_Sensor_Location(self): #https://github.com/oesmith/gatt-xml , for bit field
-        Location = bytearray([0x06])
-        self._ble.gatts_write(self.pm_handle, Location) # send power data by ble
+    def SendSensorLocation(self): #https://github.com/oesmith/gatt-xml , for bit field
+        Location = bytearray([0x05]) #Left Crank
+        self._ble.gatts_write(self.sl_handle, Location) # send power data by ble
 
     def SendPowerFlagOnly(self):
         flags = 0x20 #https://github.com/oesmith/gatt-xml , for bit field
@@ -256,6 +259,8 @@ def send_power_event(t):
     if connected or button_mode == 1:
         blepm.SendPowerData(notify=True, indicate=False)
     else:
+        blepm.SendPowerfeature()
+        blepm.SendSensorLocation()
         blepm.SendPowerFlagOnly()
 
 TimeEvent1 = Timer(-1)
@@ -268,8 +273,8 @@ while True:
     if blepm.is_connected() and connected == 0:
         pin.value(0)
         sleep(0.5)
-        blepm.Update_Power_feature()
-        blepm.Update_Sensor_Location()
+        #blepm.SendPowerfeature()
+        #blepm.SendSensorLocation()
         connected = 1
     elif not blepm.is_connected():
         pin.value(1)
