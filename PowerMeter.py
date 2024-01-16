@@ -32,7 +32,7 @@ Crank_Length = 0.1725
 angle_count = 0
 crank_event_counter = 0
 
-sensing_time = 40 # in ms, 25 times per sec(25Hz)
+sensing_time = 50 # in ms, 20 times per sec(20Hz)
 X_fact = 0.012 # force/vlotage curve
 #LastVlot   = []  # compare last _LAST_DATA Vlotage data
 LastPower  = []   # compare last _LAST_DATA Power data
@@ -41,7 +41,11 @@ LastPower  = []   # compare last _LAST_DATA Power data
 cali_offset = 0
 gyro_offset = [0,0,0]
 
+chip_freq = 125000000
 
+debug_gyro_z = 0
+
+global mpu
 
 class MPU6050:
     """Class for reading gyro rates and acceleration data from an MPU-6050 module via I2C."""
@@ -54,6 +58,8 @@ class MPU6050:
         """
         self.address = address
         self.i2c = i2c
+        self.first_round = 0
+        self.gyro_fs_sel = 0
 
     def wake(self) -> None:
         """Wake up the MPU-6050."""
@@ -68,7 +74,7 @@ class MPU6050:
         self.i2c.writeto_mem(self.address, 0x6B, bytes([0x28]))
         # LP_WAKE_CTRL = b'10'(20Hz), disable Accelerometer XYZ and gyroscope XY into standby mode (set to 1)
         self.i2c.writeto_mem(self.address, 0x6C, bytes([0xBE]))
-
+        #self.i2c.writeto_mem(self.address, 0x6C, bytes([0x7E]))
     def who_am_i(self) -> int:
         """Returns the address of the MPU-6050 (ensure it is working)."""
         return self.i2c.readfrom_mem(self.address, 0x75, 1)[0]
@@ -109,6 +115,28 @@ class MPU6050:
         z:float = (self._translate_pair(data[4], data[5])) / modifier
 
         return (x, y, z)
+
+    def read_gyro_data_z(self) -> tuple[float, float, float]:
+        """Read the gyroscope data, in  z."""
+        # set the modified based on the gyro range (need to divide to calculate)
+        if self.first_round == 0:
+            self.gyro_fs_sel:int = self.read_gyro_range()
+            self.first_round = 1
+        modifier:float = None
+        if self.gyro_fs_sel == 0:
+            modifier = 131.0
+        elif self.gyro_fs_sel == 1:
+            modifier = 65.5
+        elif self.gyro_fs_sel == 2:
+            modifier = 32.8
+        elif self.gyro_fs_sel == 3:
+            modifier = 16.4
+
+        # read data
+        data = self.i2c.readfrom_mem(self.address, 0x47, 2) # read 2 bytes (gyro data)
+        z:float = (self._translate_pair(data[0], data[1])) / modifier
+
+        return z
 
     def read_accel_range(self) -> int:
         """Reads the accelerometer range setting."""
@@ -208,7 +236,7 @@ def calibration_gyro_offset(mpu):
     gyro_offset[0] = gx / index
     gyro_offset[1] = gy / index
     gyro_offset[2] = gz / index
-
+    print("calibration_gyro_offset = (x,y,z) ",gyro_offset[0],",",gyro_offset[1],",",gyro_offset[2])
 
 def calibration():
     global cali_offset
@@ -243,12 +271,13 @@ def get_sensor_vaule(): # get voltage vaule from amp
     sensor_v = adc.read_u16()
     return sensor_v
 
-def AngularVelocity(mpu):
+def AngularVelocity():
     # get from IMU
-    AngV = 500 + random.random()*70
-
-    '''gyro = mpu.read_gyro_data()
-    gyro_z = gyro[2] - gyro_offset[2]
+    #AngV = 500 + random.random()*70
+    #global debug_gyro_z
+    #print("before read")
+    gyro = mpu.read_gyro_data_z()
+    gyro_z = gyro - gyro_offset[2]
     if abs(gyro_z) < 1.5:
         gyro_z = 0
     if gyro_z <= 0:  # take native gyro_z only, and reverse it to postive values
@@ -256,7 +285,10 @@ def AngularVelocity(mpu):
     else:
         gyro_z = 0
 
-    AngV = gyro_z'''
+    #print("Gyro-Z = ",gyro_z,"count = ",debug_gyro_z)
+    #debug_gyro_z += 1
+
+    AngV = gyro_z
     #AngV = 520  # degree/s (rpm ~= 90)
     #print("AngularVelocity=",AngV)
     #return cadence
@@ -276,7 +308,7 @@ def calculate_power():
     Perimeter = 2 * 3.14159 * Crank_Length # 2πr
 
     #print("Perimeter= ",Perimeter)
-    power = force * Perimeter * (AngV/360) * (0.040) # P = Force * 2πr * (angle traveled/360, per 40 ms)
+    power = force * Perimeter * (AngV/360) * (sensing_time/1000) # P = Force * 2πr * (angle traveled/360, per 50 ms)
   
     if power < 1:
         power = 0
@@ -286,15 +318,16 @@ def calculate_power():
     #rpm = AngV * 60 / 360
 
     # calculate crank event
-    angle_count += AngV * 0.040 # in 40ms
+    angle_count += AngV * (sensing_time/1000) # in 50ms
     crank_event_counter += 1
 
     if angle_count > 360:       # crank event (one rotation)
-        Crank_Timestamp += int((crank_event_counter*40)/1000 * 1024)
+        Crank_Timestamp += int((crank_event_counter*sensing_time)/1000 * 1024)
         crank_event_counter = 0
         while angle_count > 360:    # crank event (one rotation)
             angle_count -= 360
             Crank_Revolutions += 1
+            print("Crank_Revolutions =",Crank_Revolutions)
 
     #print("angle_count =",angle_count)
     #print("rpm =",rpm)
@@ -344,8 +377,8 @@ class BlePowerMeter:
     def update_power_data(self):
         global LastPower
         power = calculate_power()
-        # update power data (40ms) into power list, full of list is 25 data
-        if len(LastPower) == 25:
+        # update power data (50ms) into power list, full of list is 20 data
+        if len(LastPower) == (1000/sensing_time):
             LastPower.append(power)
             LastPower.pop(0)
             #print("sum power25 =",sum(LastPower),"average = ",sum(LastPower)/len(LastPower))
@@ -427,8 +460,12 @@ mpu.wake()
 mpu.write_gyro_range(2)
 mpu.Set_low_power_gyroZ_only()
 
-print("calibration_gyro_offset = ",calibration_gyro_offset(mpu))
+machine.freq(chip_freq)
+print("set machine.freq",machine.freq())
 
+calibration_gyro_offset(mpu)
+
+'''
 while True:
     gyro = mpu.read_gyro_data()
     #gyro_z = gyro[2]
@@ -441,11 +478,10 @@ while True:
     else:
         gyro_z = 0
 
-
     print("Gyro: " + str(gyro),"Gyro-Z = ",gyro_z)
 
-    sleep(0.5)
-
+    sleep(0.4)
+'''
 # Create a Bluetooth Low Energy (BLE) object
 ble = bluetooth.BLE()
 # Create an instance of the BlePowerMeter class with the BLE object
@@ -462,11 +498,16 @@ connected = 0
 def update_power_event(t):
     global connected
     if connected or button_mode == 1:
+        #print("update_power_event1")
         blepm.update_power_data()
+        #print("update_power_event2")
 def send_power_event(t):
     global connected
+    print("angle_count =",angle_count)
     if connected or button_mode == 1:
+        #print("send_power_event1")
         blepm.SendPowerData(notify=True, indicate=False)
+        #print("send_power_event2")
     else:
         blepm.SendPowerfeature()
         blepm.SendSensorLocation()
@@ -486,7 +527,7 @@ while True:
         #blepm.SendSensorLocation()
         connected = 1
     elif not blepm.is_connected():
-        pin.value(1)
+        #pin.value(1)
         connected = 0
     machine.idle()
     #blepm.update_power_data()
