@@ -1,10 +1,10 @@
 from machine import Pin, ADC, Timer, I2C
 from utime import sleep
+import utime
 import bluetooth
 from Ble_Advertising import advertising_payload
 from micropython import const
 import random
-
 
 _IRQ_CENTRAL_CONNECT = const(1)
 _IRQ_CENTRAL_DISCONNECT = const(2)
@@ -64,17 +64,41 @@ class MPU6050:
     def wake(self) -> None:
         """Wake up the MPU-6050."""
         self.i2c.writeto_mem(self.address, 0x6B, bytes([0x01]))
+        #read FIFO_EN
+        data = self.i2c.readfrom_mem(self.address, 0x6A, 1)[0]
+        print("reg 6A:",data)
+        data = self.i2c.readfrom_mem(self.address, 0x1A, 1)[0]
+        print("reg 1A:",data)
+        data = self.i2c.readfrom_mem(self.address, 0x23, 1)[0]
+        print("reg 23:",data)
+        data = self.i2c.readfrom_mem(self.address, 0x75, 1)[0]
+        print("reg 75:",data)
+        data = self.i2c.readfrom_mem(self.address, 0x19, 1)[0]
+        print("reg 19:",data)
 
     def sleep(self) -> None:
         """Places MPU-6050 in sleep mode (low power consumption). Stops the internal reading of new data. Any calls to get gyro or accel data while in sleep mode will remain unchanged - the data is not being updated internally within the MPU-6050!"""
         self.i2c.writeto_mem(self.address, 0x6B, bytes([0x40]))
 
     def Set_low_power_gyroZ_only(self) -> None:
+
+        #open FIFO_EN
+        self.i2c.writeto_mem(self.address, 0x6A, bytes([0x40]))
+        #open FIFO_ZG
+        self.i2c.writeto_mem(self.address, 0x23, bytes([0x10]))
+        #set Digital Low Pass Filter (DLPF) to 2
+        self.i2c.writeto_mem(self.address, 0x1A, bytes([0x02]))
+        #set Sample Rate = Gyroscope Output Rate / (1 + SMPLRT_DIV) , Gyroscope Output Rate = 1kHz ,  SMPLRT_DIV = 49 , Sample Rate = 20Hz
+        self.i2c.writeto_mem(self.address, 0x19, bytes([0x31]))
+
         #Set CYCLE bit to 1 and TEMP_DIS to 1
         self.i2c.writeto_mem(self.address, 0x6B, bytes([0x28]))
         # LP_WAKE_CTRL = b'10'(20Hz), disable Accelerometer XYZ and gyroscope XY into standby mode (set to 1)
         self.i2c.writeto_mem(self.address, 0x6C, bytes([0xBE]))
         #self.i2c.writeto_mem(self.address, 0x6C, bytes([0x7E]))
+
+        data = self.i2c.readfrom_mem(self.address, 0x6A, 1)[0]
+        print("reg 6A:",data)
     def who_am_i(self) -> int:
         """Returns the address of the MPU-6050 (ensure it is working)."""
         return self.i2c.readfrom_mem(self.address, 0x75, 1)[0]
@@ -116,7 +140,7 @@ class MPU6050:
 
         return (x, y, z)
 
-    def read_gyro_data_z(self) -> tuple[float, float, float]:
+    def read_gyro_data_z(self) -> float:
         """Read the gyroscope data, in  z."""
         # set the modified based on the gyro range (need to divide to calculate)
         if self.first_round == 0:
@@ -137,6 +161,33 @@ class MPU6050:
         z:float = (self._translate_pair(data[0], data[1])) / modifier
 
         return z
+
+    def read_gyro_data_z_FIFO(self) -> float:
+        """Read the gyroscope data, in  z."""
+        # set the modified based on the gyro range (need to divide to calculate)
+        if self.first_round == 0:
+            self.gyro_fs_sel:int = self.read_gyro_range()
+            self.first_round = 1
+        modifier:float = None
+        if self.gyro_fs_sel == 0:
+            modifier = 131.0
+        elif self.gyro_fs_sel == 1:
+            modifier = 65.5
+        elif self.gyro_fs_sel == 2:
+            modifier = 32.8
+        elif self.gyro_fs_sel == 3:
+            modifier = 16.4
+
+        # read data
+        data1 = self.i2c.readfrom_mem(self.address, 0x74, 1) # read 1 bytes (gyro data from FIFO) High
+        data2 = self.i2c.readfrom_mem(self.address, 0x74, 1) # read 1 bytes (gyro data from FIFO) Low
+        z:float = (self._translate_pair(data1[0], data2[0])) / modifier
+
+        data3 = self.i2c.readfrom_mem(self.address, 0x72, 2)
+        data4 = self.i2c.readfrom_mem(self.address, 0x3A, 1)
+        print("FIFO_count=",data3[0],data3[1]," INT_STATUS-",data4[0])
+        return z
+
 
     def read_accel_range(self) -> int:
         """Reads the accelerometer range setting."""
@@ -277,8 +328,11 @@ def AngularVelocity():
     #global debug_gyro_z
     #print("before read")
     gyro = mpu.read_gyro_data_z()
+    gyro_FIFO = mpu.read_gyro_data_z_FIFO()
+    #print("Gyro =",gyro," GyroFIFO =",gyro_FIFO)
+    gyro = gyro_FIFO
     gyro_z = gyro - gyro_offset[2]
-    if abs(gyro_z) < 1.5:
+    if abs(gyro_z) < 0.5:
         gyro_z = 0
     if gyro_z <= 0:  # take native gyro_z only, and reverse it to postive values
         gyro_z = abs(gyro_z)
@@ -303,7 +357,7 @@ def calculate_power():
         volt = volt - cali_offset
     force = volt * X_fact
     #print("force N= ",force,"vlot=",volt)
-    AngV = AngularVelocity()
+    AngV = AngularVelocity() * 2 # x2 debug used
 
     Perimeter = 2 * 3.14159 * Crank_Length # 2πr
 
@@ -489,24 +543,30 @@ blepm = BlePowerMeter(ble,"PowerMeter_longhao")
 
 counter = 0
 
+print("read register 26")
+
 print("calibration Start")
-calibration()
+#calibration()
 print("calibration Done")
 # Start an infinite loop
 connected = 0
-
+rtc = machine.RTC()
 def update_power_event(t):
+    start = utime.ticks_us()
     global connected
     if connected or button_mode == 1:
         #print("update_power_event1")
         blepm.update_power_data()
+        #print("diff in us = ",utime.ticks_diff(utime.ticks_us(), start))
         #print("update_power_event2")
+
 def send_power_event(t):
     global connected
-    print("angle_count =",angle_count)
     if connected or button_mode == 1:
+        print("angle_count =",angle_count)
         #print("send_power_event1")
         blepm.SendPowerData(notify=True, indicate=False)
+        #print(utime.ticks_ms())
         #print("send_power_event2")
     else:
         blepm.SendPowerfeature()
