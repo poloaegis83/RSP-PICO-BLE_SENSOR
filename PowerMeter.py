@@ -83,9 +83,9 @@ class MPU6050:
     def Set_low_power_gyroZ_only(self) -> None:
 
         #open FIFO_EN
-        self.i2c.writeto_mem(self.address, 0x6A, bytes([0x40]))
+        #self.i2c.writeto_mem(self.address, 0x6A, bytes([0x40]))
         #open FIFO_ZG
-        self.i2c.writeto_mem(self.address, 0x23, bytes([0x10]))
+        #self.i2c.writeto_mem(self.address, 0x23, bytes([0x10]))
         #set Digital Low Pass Filter (DLPF) to 2
         self.i2c.writeto_mem(self.address, 0x1A, bytes([0x02]))
         #set Sample Rate = Gyroscope Output Rate / (1 + SMPLRT_DIV) , Gyroscope Output Rate = 1kHz ,  SMPLRT_DIV = 49 , Sample Rate = 20Hz
@@ -183,9 +183,9 @@ class MPU6050:
         data2 = self.i2c.readfrom_mem(self.address, 0x74, 1) # read 1 bytes (gyro data from FIFO) Low
         z:float = (self._translate_pair(data1[0], data2[0])) / modifier
 
-        data3 = self.i2c.readfrom_mem(self.address, 0x72, 2)
-        data4 = self.i2c.readfrom_mem(self.address, 0x3A, 1)
-        print("FIFO_count=",data3[0],data3[1]," INT_STATUS-",data4[0])
+        #data3 = self.i2c.readfrom_mem(self.address, 0x72, 2)
+        #data4 = self.i2c.readfrom_mem(self.address, 0x3A, 1)
+        #print("FIFO_count=",data3[0],data3[1]," INT_STATUS-",data4[0])
         return z
 
 
@@ -275,14 +275,14 @@ def calibration_gyro_offset(mpu):
     gx = 0
     gy = 0
     gz = 0
-    index = 10
+    index = 100
     index1 = index
     while index1 > 0:
         gyro = mpu.read_gyro_data()
         gx += gyro[0]
         gy += gyro[1]
         gz += gyro[2]
-        sleep(0.4)
+        sleep(0.01)
         index1 -= 1
     gyro_offset[0] = gx / index
     gyro_offset[1] = gy / index
@@ -312,7 +312,7 @@ def Smoothing_power(Pdata):
         EMA = Pdata
     EMA = (Pdata*4 + EMA)/5
     NewPdata = EMA
-    print("Smoothing_power = ",NewPdata)
+    #print("Smoothing_power = ",NewPdata)
     return NewPdata
     None # "moving average" ?
 
@@ -328,11 +328,11 @@ def AngularVelocity():
     #global debug_gyro_z
     #print("before read")
     gyro = mpu.read_gyro_data_z()
-    gyro_FIFO = mpu.read_gyro_data_z_FIFO()
+    #gyro_FIFO = mpu.read_gyro_data_z_FIFO()
     #print("Gyro =",gyro," GyroFIFO =",gyro_FIFO)
-    gyro = gyro_FIFO
+    #gyro = gyro_FIFO
     gyro_z = gyro - gyro_offset[2]
-    if abs(gyro_z) < 0.5:
+    if abs(gyro_z) < 1:
         gyro_z = 0
     if gyro_z <= 0:  # take native gyro_z only, and reverse it to postive values
         gyro_z = abs(gyro_z)
@@ -344,7 +344,7 @@ def AngularVelocity():
 
     AngV = gyro_z
     #AngV = 520  # degree/s (rpm ~= 90)
-    #print("AngularVelocity=",AngV)
+    #print("AngV=",AngV," ",end = '')
     #return cadence
     return AngV
 
