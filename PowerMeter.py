@@ -1,4 +1,4 @@
-from machine import Pin, ADC, Timer, I2C
+from machine import Pin, ADC, Timer, I2C, UART
 from utime import sleep
 import utime
 import bluetooth
@@ -357,7 +357,7 @@ def calculate_power():
         volt = volt - cali_offset
     force = volt * X_fact
     #print("force N= ",force,"vlot=",volt)
-    AngV = AngularVelocity() * 2 # x2 debug used
+    AngV = AngularVelocity() * 2.1 # x2 debug used
 
     Perimeter = 2 * 3.14159 * Crank_Length # 2πr
 
@@ -490,7 +490,7 @@ class BlePowerMeter:
                 if indicate:
                     # Indicate connected centrals.
                     self._ble.gatts_indicate(conn_handle, self.pm_handle)
-button_mode = 0
+button_mode = 1
 
 def Buttoncallback1(t):
     global button_mode
@@ -500,11 +500,21 @@ def Buttoncallback1(t):
     elif button_mode == 1:
         button_mode = 0
 
+def Ant51422Init():
+    uart0 = UART(0,115200)
+    uart0.init(115200, bits=8, parity=None, stop=1) #, tx=Pin(16), rx=Pin(17))
+    #uart0.write('hello')  # write 5 bytes
+    sleep(1)
+    uart0.write(bytes([0x09,0x46,0x01,0xb9,0xa5,0x21,0xfb,0xbd,0x72,0xc3,0x45]))
+    sleep(1)
+    print(uart0.read(5))
+
 pin = Pin("LED", Pin.OUT)
 
 Button   = machine.Pin(15, machine.Pin.IN,Pin.PULL_UP)
 Button.irq (trigger=Button.IRQ_FALLING, handler=Buttoncallback1) #interrupt
 
+Ant51422Init()
 
 i2c = I2C(0, scl=Pin(1), sda=Pin(0), freq=400000)
 mpu = MPU6050(i2c)
