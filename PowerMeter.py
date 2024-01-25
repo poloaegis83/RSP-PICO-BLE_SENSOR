@@ -500,21 +500,91 @@ def Buttoncallback1(t):
     elif button_mode == 1:
         button_mode = 0
 
-def Ant51422Init():
-    uart0 = UART(0,115200)
-    uart0.init(115200, bits=8, parity=None, stop=1) #, tx=Pin(16), rx=Pin(17))
-    #uart0.write('hello')  # write 5 bytes
+def PrintReadUart(data):
+    if data == None:
+        print("none")
+        return
+    for rdata in data:
+        print(hex(rdata),", ",end='')
+    print('')
+
+
+uart0 = UART(0,115200, tx=Pin(16), rx=Pin(17))
+uart0.init(115200, bits=8, parity=None, stop=1, tx=Pin(16), rx=Pin(17)) #, tx=Pin(16), rx=Pin(17))
+
+ant_rst  = machine.Pin(21, machine.Pin.OUT)
+ant_cs   = machine.Pin(20, machine.Pin.OUT)
+
+ant_rst.value(1)
+ant_cs.value(1)
+
+def Ant51422Reset():
+    # De-Assert RESET pin
+    print("Ant51422 Reset")
+    ant_rst.value(0)
     sleep(1)
+    ant_rst.value(1)
+
+def Ant51422Sleep():
+    # De-Assert CS pin to sleep
+    if ant_cs.value() != 0:
+        print("Ant51422 Sleep")
+        ant_cs.value(0)
+
+def Ant51422Wake():
+    # Assert CS pin to wake
+    if ant_cs.value() != 1:
+        print("Ant51422 Wake")
+        ant_cs.value(1)
+
+def Ant51422Init():
+    #uart0.write('hello')  # write 5 bytes
+    sleep(2)
+    # Set Network Key
+    print("Set Network Key")
     uart0.write(bytes([0x09,0x46,0x01,0xb9,0xa5,0x21,0xfb,0xbd,0x72,0xc3,0x45]))
     sleep(1)
-    print(uart0.read(5))
+    PrintReadUart(uart0.readline())    
+    # Set Channel Number (channel_assign)
+    print("Set Channel Number (channel_assign)")
+    uart0.write(bytes([0x03,0x42,0x01,0x10,0x01]))
+    sleep(1)
+    PrintReadUart(uart0.readline())
+    # Set Channel ID  0xb for power meter, 0x7b for speed sensor 
+    print("Set Channel ID")
+    uart0.write(bytes([0x05,0x51,0x01,0xfa,0x8c,0x8b,0x45]))
+    sleep(1)
+    PrintReadUart(uart0.readline())    
+    # Set Channel RF frequency
+    print("Set Channel RF frequency")
+    uart0.write(bytes([0x02,0x45,0x01,0x39]))
+    sleep(1)
+    PrintReadUart(uart0.readline())    
+    # Set Channel period
+    print("Set Channel period")
+    uart0.write(bytes([0x03,0x43,0x01,0x86,0x1f]))
+    sleep(1)
+    PrintReadUart(uart0.readline())    
+    # Fill first frame
+    print("Fill first frame")
+    uart0.write(bytes([0x09,0x4e,0x01,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08]))
+    sleep(2)
+    PrintReadUart(uart0.readline())    
+    # Open Channel
+    print("Open Channel")
+    uart0.write(bytes([0x01,0x4b,0x01]))
+    sleep(1)
+    PrintReadUart(uart0.readline())    
+
+Ant51422Init()
+while 1:
+    sleep(1)
+
 
 pin = Pin("LED", Pin.OUT)
 
 Button   = machine.Pin(15, machine.Pin.IN,Pin.PULL_UP)
 Button.irq (trigger=Button.IRQ_FALLING, handler=Buttoncallback1) #interrupt
-
-Ant51422Init()
 
 i2c = I2C(0, scl=Pin(1), sda=Pin(0), freq=400000)
 mpu = MPU6050(i2c)
