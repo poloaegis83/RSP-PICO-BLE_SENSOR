@@ -5,6 +5,9 @@ import bluetooth
 from Ble_Advertising import advertising_payload
 from micropython import const
 import random
+from ssd1306 import SSD1306_I2C
+from MPU6050Lib import MPU6050
+from RF51422 import ANT51422
 
 _IRQ_CENTRAL_CONNECT = const(1)
 _IRQ_CENTRAL_DISCONNECT = const(2)
@@ -46,7 +49,7 @@ chip_freq = 125000000
 debug_gyro_z = 0
 
 global mpu
-
+'''
 class MPU6050:
     """Class for reading gyro rates and acceleration data from an MPU-6050 module via I2C."""
 
@@ -270,7 +273,7 @@ class MPU6050:
             return 0x18
         else:
             raise Exception("Range index '" + index + "' invalid. Must be 0-3.")
-
+'''
 def calibration_gyro_offset(mpu):
     gx = 0
     gy = 0
@@ -499,7 +502,7 @@ def Buttoncallback1(t):
         button_mode = 1
     elif button_mode == 1:
         button_mode = 0
-
+'''
 def PrintReadUart(data):
     if data == None:
         print("none")
@@ -507,17 +510,25 @@ def PrintReadUart(data):
     for rdata in data:
         print(hex(rdata),", ",end='')
     print('')
+'''
+
+def InitAntRF():
+    uart0 = UART(0,115200, tx=Pin(16), rx=Pin(17))
+    uart0.init(115200, bits=8, parity=None, stop=1, tx=Pin(16), rx=Pin(17)) #, tx=Pin(16), rx=Pin(17))
+    ant_rst  = machine.Pin(21, machine.Pin.OUT)
+    ant_cs   = machine.Pin(20, machine.Pin.OUT)
+    return ANT51422(uart0,ant_rst,ant_cs)
 
 
-uart0 = UART(0,115200, tx=Pin(16), rx=Pin(17))
-uart0.init(115200, bits=8, parity=None, stop=1, tx=Pin(16), rx=Pin(17)) #, tx=Pin(16), rx=Pin(17))
 
-ant_rst  = machine.Pin(21, machine.Pin.OUT)
-ant_cs   = machine.Pin(20, machine.Pin.OUT)
+i2c0 = I2C(0, scl=Pin(13), sda=Pin(12), freq=400000)
+oled = SSD1306_I2C(128, 32, i2c0)
 
-ant_rst.value(1)
-ant_cs.value(1)
+#AntDev = InitAntRF()
 
+#ant_rst.value(1)
+#ant_cs.value(1)
+'''
 def Ant51422Reset():
     # De-Assert RESET pin
     print("Ant51422 Reset")
@@ -541,18 +552,20 @@ def Ant51422Init():
     #uart0.write('hello')  # write 5 bytes
     sleep(2)
     # Set Network Key
-    print("Set Network Key")
-    uart0.write(bytes([0x09,0x46,0x01,0xb9,0xa5,0x21,0xfb,0xbd,0x72,0xc3,0x45]))
+    #print("Set Network Key")
+    #uart0.write(bytes([0x09,0x46,0x01,0xb9,0xa5,0x21,0xfb,0xbd,0x72,0xc3,0x45]))
     sleep(1)
     PrintReadUart(uart0.readline())    
     # Set Channel Number (channel_assign)
     print("Set Channel Number (channel_assign)")
-    uart0.write(bytes([0x03,0x42,0x01,0x10,0x01]))
+    #uart0.write(bytes([0x03,0x42,0x01,0x10,0x01]))
+    uart0.write(bytes([0x03,0x42,0x00,0x10,0x00]))
     sleep(1)
     PrintReadUart(uart0.readline())
     # Set Channel ID  0xb for power meter, 0x7b for speed sensor 
     print("Set Channel ID")
-    uart0.write(bytes([0x05,0x51,0x01,0xfa,0x8c,0x8b,0x45]))
+    #uart0.write(bytes([0x05,0x51,0x00,0xfa,0x8c,0x8b,0x45]))
+    uart0.write(bytes([0x05,0x51,0x00,0x01,0x00,0x80,0x10]))
     sleep(1)
     PrintReadUart(uart0.readline())    
     # Set Channel RF frequency
@@ -576,18 +589,22 @@ def Ant51422Init():
     sleep(1)
     PrintReadUart(uart0.readline())    
 
-Ant51422Init()
-while 1:
-    sleep(1)
+#Ant51422Init()
+#while 1:
+#    sleep(1)
+'''
 
+#AntDev.SetAntSample()
+#while 1:
+#        sleep(1)
 
 pin = Pin("LED", Pin.OUT)
 
-Button   = machine.Pin(15, machine.Pin.IN,Pin.PULL_UP)
+Button   = machine.Pin(22, machine.Pin.IN,Pin.PULL_UP)
 Button.irq (trigger=Button.IRQ_FALLING, handler=Buttoncallback1) #interrupt
 
-i2c = I2C(0, scl=Pin(1), sda=Pin(0), freq=400000)
-mpu = MPU6050(i2c)
+i2c1 = I2C(1, scl=Pin(15), sda=Pin(14), freq=400000)
+mpu = MPU6050(i2c1)
 
 #i2c.writeto_mem(0x68, 0x6B, bytes([0x01]))
 mpu.wake()
@@ -631,6 +648,11 @@ print("calibration Done")
 # Start an infinite loop
 connected = 0
 rtc = machine.RTC()
+
+oled.text('angle_count', 0, 0)
+oled.show()
+
+
 def update_power_event(t):
     start = utime.ticks_us()
     global connected
@@ -644,6 +666,10 @@ def send_power_event(t):
     global connected
     if connected or button_mode == 1:
         print("angle_count =",angle_count)
+        oled.fill(0)
+        oled.text('angle_count', 0, 0,1)
+        oled.text(str(angle_count), 0, 10,8)
+        oled.show()
         #print("send_power_event1")
         blepm.SendPowerData(notify=True, indicate=False)
         #print(utime.ticks_ms())
