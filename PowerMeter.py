@@ -667,8 +667,10 @@ def send_power_event(t):
     if connected or button_mode == 1:
         print("angle_count =",angle_count)
         oled.fill(0)
-        oled.text('angle_count', 0, 0,1)
-        oled.text(str(angle_count), 0, 10,8)
+        oled.text('Angle=', 0, 0)
+        oled.text(str(angle_count), 50, 0)
+        oled.text('Round=', 0, 10)
+        oled.text(str(Crank_Revolutions), 50, 10)
         oled.show()
         #print("send_power_event1")
         blepm.SendPowerData(notify=True, indicate=False)
